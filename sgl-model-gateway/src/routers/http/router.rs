@@ -1,4 +1,10 @@
-use std::{sync::Arc, time::Instant};
+use std::{
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    },
+    time::Instant,
+};
 
 use axum::{
     body::{to_bytes, Body},
@@ -11,6 +17,9 @@ use futures_util::{stream, StreamExt};
 use reqwest::Client;
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use tracing::{debug, error};
+
+/// Monotonic request counter for generating short debug request IDs
+static REQUEST_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 use crate::{
     app_context::AppContext,
@@ -198,10 +207,16 @@ impl Router {
         model_id: Option<&str>,
     ) -> Response {
         let start = Instant::now();
+        let req_id = REQUEST_COUNTER.fetch_add(1, Ordering::Relaxed);
         let is_stream = typed_req.is_stream();
         let text = typed_req.extract_text_for_routing();
         let model = model_id.unwrap_or(UNKNOWN_MODEL_ID);
         let endpoint = route_to_endpoint(route);
+
+        debug!(
+            "[req-{}] START route={} model={} stream={}",
+            req_id, route, model, is_stream
+        );
 
         // Record request start (Layer 2)
         Metrics::record_router_request(
@@ -218,7 +233,9 @@ impl Router {
             // operation per attempt
             |_: u32| async {
                 let res = self
-                    .route_typed_request_once(headers, typed_req, route, model_id, is_stream, &text)
+                    .route_typed_request_once(
+                        headers, typed_req, route, model_id, is_stream, &text, req_id,
+                    )
                     .await;
 
                 // Need to be outside `route_typed_request_once` because that function has multiple return paths
@@ -247,6 +264,12 @@ impl Router {
 
         if response.status().is_success() {
             let duration = start.elapsed();
+            debug!(
+                "[req-{}] DONE status={} total={:?}",
+                req_id,
+                response.status().as_u16(),
+                duration
+            );
             Metrics::record_router_duration(
                 metrics_labels::ROUTER_HTTP,
                 metrics_labels::BACKEND_REGULAR,
@@ -277,6 +300,7 @@ impl Router {
         model_id: Option<&str>,
         is_stream: bool,
         text: &str,
+        req_id: u64,
     ) -> Response {
         let route_start = Instant::now();
 
@@ -320,18 +344,19 @@ impl Router {
                 worker.url(),
                 is_stream,
                 load_guard,
+                req_id,
             )
             .await;
 
         let t_post_send = route_start.elapsed();
 
         debug!(
-            "HTTP route_typed_request_once: worker_select={:?}, pre_send_overhead={:?}, send_request={:?}, total={:?}, route={}, worker={}",
+            "[req-{}] ROUTE worker_select={:?} pre_send={:?} send={:?} total={:?} worker={}",
+            req_id,
             t_worker_select,
             t_pre_send - t_worker_select,
             t_post_send - t_pre_send,
             t_post_send,
-            route,
             worker.url(),
         );
 
@@ -508,6 +533,7 @@ impl Router {
         worker_url: &str,
         is_stream: bool,
         load_guard: Option<WorkerLoadGuard>,
+        req_id: u64,
     ) -> Response {
         let send_start = Instant::now();
 
@@ -566,6 +592,8 @@ impl Router {
                 .json(typed_req) // Use json() directly with typed request
         };
 
+        let t_json_serialize = send_start.elapsed();
+
         if let Some(key) = api_key {
             // Pre-allocate string with capacity to avoid reallocation
             let mut auth_header = String::with_capacity(7 + key.len());
@@ -584,25 +612,29 @@ impl Router {
 
         let t_build_request = send_start.elapsed();
 
+        // This .send() writes the full request body and waits for HTTP response headers.
+        // For streaming, this returns as soon as the server sends back headers (before any chunks).
         let res = match request_builder.send().await {
             Ok(res) => res,
             Err(e) => {
                 error!(
-                    "Failed to send typed request worker_url={} route={} error={}",
-                    worker_url, route, e
+                    "[req-{}] Failed to send: worker_url={} route={} error={}",
+                    req_id, worker_url, route, e
                 );
 
                 return convert_reqwest_error(e);
             }
         };
 
-        let t_http_send = send_start.elapsed();
+        let t_response_headers = send_start.elapsed();
 
         debug!(
-            "HTTP send_typed_request: build_request={:?}, http_send={:?}, route={}",
-            t_build_request,
-            t_http_send - t_build_request,
-            route,
+            "[req-{}] SEND json_serialize={:?} build_headers={:?} http_roundtrip={:?} (total_to_response_headers={:?})",
+            req_id,
+            t_json_serialize,
+            t_build_request - t_json_serialize,
+            t_response_headers - t_build_request,
+            t_response_headers,
         );
 
         let status = StatusCode::from_u16(res.status().as_u16())
@@ -614,6 +646,14 @@ impl Router {
 
             let response = match res.bytes().await {
                 Ok(body) => {
+                    let t_body_read = send_start.elapsed();
+                    debug!(
+                        "[req-{}] NON-STREAM body_read={:?} total={:?} body_size={}",
+                        req_id,
+                        t_body_read - t_response_headers,
+                        t_body_read,
+                        body.len(),
+                    );
                     let mut response = Response::new(Body::from(body));
                     *response.status_mut() = status;
                     *response.headers_mut() = response_headers;
@@ -636,13 +676,36 @@ impl Router {
             let stream = res.bytes_stream();
             let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
 
+            // Capture timing for TTFT measurement inside the stream forwarding task
+            let stream_start = send_start;
+            let stream_req_id = req_id;
+
             // Spawn task to forward stream
             tokio::spawn(async move {
                 let mut stream = stream;
+                let mut chunk_count: u64 = 0;
+                let mut total_bytes: usize = 0;
+
                 while let Some(chunk) = stream.next().await {
                     match chunk {
                         Ok(bytes) => {
+                            chunk_count += 1;
+                            total_bytes += bytes.len();
+
+                            if chunk_count == 1 {
+                                debug!(
+                                    "[req-{}] TTFT first_chunk_at={:?} chunk_size={}",
+                                    stream_req_id,
+                                    stream_start.elapsed(),
+                                    bytes.len(),
+                                );
+                            }
+
                             if tx.send(Ok(bytes)).is_err() {
+                                debug!(
+                                    "[req-{}] STREAM client disconnected at chunk {}",
+                                    stream_req_id, chunk_count
+                                );
                                 break;
                             }
                         }
@@ -652,6 +715,14 @@ impl Router {
                         }
                     }
                 }
+
+                debug!(
+                    "[req-{}] STREAM done chunks={} total_bytes={} stream_duration={:?}",
+                    stream_req_id,
+                    chunk_count,
+                    total_bytes,
+                    stream_start.elapsed(),
+                );
             });
 
             let stream = UnboundedReceiverStream::new(rx);
