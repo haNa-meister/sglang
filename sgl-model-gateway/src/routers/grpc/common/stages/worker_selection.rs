@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use axum::response::Response;
-use tracing::{error, warn};
+use tracing::{debug, error, warn};
 
 use super::PipelineStage;
 use crate::{
@@ -180,6 +180,13 @@ impl WorkerSelectionStage {
             .await?;
         let selected = available[idx].clone();
 
+        debug!(
+            "Worker selected: url={}, model={}, policy={}",
+            selected.url(),
+            model_id.unwrap_or(UNKNOWN_MODEL_ID),
+            policy.name(),
+        );
+
         // Record worker selection metric
         Metrics::record_worker_selection(
             metrics_labels::WORKER_REGULAR,
@@ -252,6 +259,14 @@ impl WorkerSelectionStage {
 
         let model = model_id.unwrap_or(UNKNOWN_MODEL_ID);
         let policy_name = policy.name();
+
+        debug!(
+            "PD pair selected: prefill={}, decode={}, model={}, policy={}",
+            available_prefill[prefill_idx].url(),
+            available_decode[decode_idx].url(),
+            model,
+            policy_name,
+        );
 
         // Record worker selection metrics for both prefill and decode
         Metrics::record_worker_selection(

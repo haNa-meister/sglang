@@ -363,9 +363,10 @@ impl LoadMonitor {
 
             if !loads.is_empty() {
                 debug!(
-                    "Fetched loads from {} workers, updating {} PowerOfTwo policies",
+                    "Fetched loads from {} workers, updating {} PowerOfTwo policies: {:?}",
                     loads.len(),
-                    power_of_two_policies.len()
+                    power_of_two_policies.len(),
+                    loads
                 );
                 for policy in &power_of_two_policies {
                     policy.update_loads(&loads);

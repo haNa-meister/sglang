@@ -281,8 +281,14 @@ impl RequestPipeline {
         let mut ctx = RequestContext::for_chat(request, headers, model_id, components);
 
         for stage in self.stages.iter() {
+            let stage_start = Instant::now();
             match stage.execute(&mut ctx).await {
                 Ok(Some(response)) => {
+                    debug!(
+                        "Stage {} completed (final) in {:?}",
+                        stage.name(),
+                        stage_start.elapsed()
+                    );
                     // Stage completed with streaming response - record success and return
                     Metrics::record_router_duration(
                         metrics_labels::ROUTER_GRPC,
@@ -292,9 +298,20 @@ impl RequestPipeline {
                         metrics_labels::ENDPOINT_CHAT,
                         start.elapsed(),
                     );
+                    debug!(
+                        "Chat pipeline total pre-response time: {:?}",
+                        start.elapsed()
+                    );
                     return response;
                 }
-                Ok(None) => continue,
+                Ok(None) => {
+                    debug!(
+                        "Stage {} completed in {:?}",
+                        stage.name(),
+                        stage_start.elapsed()
+                    );
+                    continue;
+                }
                 Err(response) => {
                     Metrics::record_router_error(
                         metrics_labels::ROUTER_GRPC,
