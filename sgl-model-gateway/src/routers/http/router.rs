@@ -278,6 +278,8 @@ impl Router {
         is_stream: bool,
         text: &str,
     ) -> Response {
+        let route_start = Instant::now();
+
         let worker = match self
             .select_worker_for_model(model_id, Some(text), headers)
             .await
@@ -290,6 +292,8 @@ impl Router {
                 );
             }
         };
+
+        let t_worker_select = route_start.elapsed();
 
         let policy = match model_id {
             Some(model) => self.policy_registry.get_policy_or_default(model),
@@ -306,6 +310,8 @@ impl Router {
         inject_trace_context_http(&mut headers_with_trace);
         let headers = Some(&headers_with_trace);
 
+        let t_pre_send = route_start.elapsed();
+
         let response = self
             .send_typed_request(
                 headers,
@@ -316,6 +322,18 @@ impl Router {
                 load_guard,
             )
             .await;
+
+        let t_post_send = route_start.elapsed();
+
+        debug!(
+            "HTTP route_typed_request_once: worker_select={:?}, pre_send_overhead={:?}, send_request={:?}, total={:?}, route={}, worker={}",
+            t_worker_select,
+            t_pre_send - t_worker_select,
+            t_post_send - t_pre_send,
+            t_post_send,
+            route,
+            worker.url(),
+        );
 
         events::RequestReceivedEvent {}.emit();
 
@@ -491,6 +509,8 @@ impl Router {
         is_stream: bool,
         load_guard: Option<WorkerLoadGuard>,
     ) -> Response {
+        let send_start = Instant::now();
+
         // Get the worker once and reuse for API key and load tracking
         let worker = self.worker_registry.get_by_url(worker_url);
         let api_key = worker.as_ref().and_then(|w| w.api_key().clone());
@@ -562,6 +582,8 @@ impl Router {
             }
         }
 
+        let t_build_request = send_start.elapsed();
+
         let res = match request_builder.send().await {
             Ok(res) => res,
             Err(e) => {
@@ -573,6 +595,15 @@ impl Router {
                 return convert_reqwest_error(e);
             }
         };
+
+        let t_http_send = send_start.elapsed();
+
+        debug!(
+            "HTTP send_typed_request: build_request={:?}, http_send={:?}, route={}",
+            t_build_request,
+            t_http_send - t_build_request,
+            route,
+        );
 
         let status = StatusCode::from_u16(res.status().as_u16())
             .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
