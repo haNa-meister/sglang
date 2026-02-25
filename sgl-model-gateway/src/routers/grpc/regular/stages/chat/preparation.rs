@@ -1,10 +1,10 @@
 //! Chat preparation stage: Filter tools, process messages, tokenize, build constraints
 
-use std::{borrow::Cow, time::Instant};
+use std::borrow::Cow;
 
 use async_trait::async_trait;
 use axum::response::Response;
-use tracing::{debug, error};
+use tracing::error;
 
 use crate::{
     protocols::chat::ChatCompletionRequest,
@@ -43,16 +43,12 @@ impl ChatPreparationStage {
         ctx: &mut RequestContext,
         request: &ChatCompletionRequest,
     ) -> Result<(), Response> {
-        let prep_start = Instant::now();
-
         // Step 0: Resolve tokenizer from registry (cached for reuse in response processing)
         let tokenizer =
             utils::resolve_tokenizer(ctx, "ChatPreparationStage::prepare_chat").map_err(|e| *e)?;
-        let t0 = prep_start.elapsed();
 
         // Step 1: Filter tools if needed
         let body_ref = utils::filter_chat_request_by_tool_choice(request);
-        let t1 = prep_start.elapsed();
 
         // Step 2: Process messages and apply chat template
         let processed_messages = match utils::process_chat_messages(&body_ref, &*tokenizer) {
@@ -62,7 +58,6 @@ impl ChatPreparationStage {
                 return Err(error::bad_request("process_messages_failed", e));
             }
         };
-        let t2 = prep_start.elapsed();
 
         // Step 3: Tokenize the processed text (no special tokens - chat template already handles them)
         let encoding = match tokenizer.encode(&processed_messages.text, false) {
@@ -77,7 +72,6 @@ impl ChatPreparationStage {
         };
 
         let token_ids = encoding.token_ids().to_vec();
-        let t3 = prep_start.elapsed();
 
         // Step 4: Build tool constraints if needed
         let tool_call_constraint = if let Some(tools) = body_ref.tools.as_ref() {
@@ -89,7 +83,6 @@ impl ChatPreparationStage {
         } else {
             None
         };
-        let t4 = prep_start.elapsed();
 
         // Step 5: Create stop sequence decoder (build once, reuse in non-stream)
         let stop_decoder = utils::create_stop_decoder(
@@ -98,12 +91,6 @@ impl ChatPreparationStage {
             request.stop_token_ids.as_ref(),
             request.skip_special_tokens,
             request.no_stop_trim,
-        );
-        let t5 = prep_start.elapsed();
-
-        debug!(
-            "ChatPreparation breakdown: resolve_tokenizer={:?}, filter_tools={:?}, chat_template={:?}, tokenize={:?}, tool_constraints={:?}, stop_decoder={:?}, total={:?}, input_tokens={}",
-            t0, t1 - t0, t2 - t1, t3 - t2, t4 - t3, t5 - t4, t5, token_ids.len()
         );
 
         // Store results in context

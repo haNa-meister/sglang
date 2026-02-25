@@ -1,10 +1,8 @@
 //! Chat request building stage: Build proto GenerateRequest for chat requests
 
-use std::time::Instant;
-
 use async_trait::async_trait;
 use axum::response::Response;
-use tracing::{debug, error};
+use tracing::error;
 use uuid::Uuid;
 
 use crate::routers::{
@@ -33,7 +31,6 @@ impl ChatRequestBuildingStage {
 #[async_trait]
 impl PipelineStage for ChatRequestBuildingStage {
     async fn execute(&self, ctx: &mut RequestContext) -> Result<Option<Response>, Response> {
-        let build_start = Instant::now();
         let prep = ctx.state.preparation.as_ref().ok_or_else(|| {
             error!(
                 function = "ChatRequestBuildingStage::execute",
@@ -113,11 +110,6 @@ impl PipelineStage for ChatRequestBuildingStage {
 
         ctx.state.proto_request = Some(
             crate::routers::grpc::proto_wrapper::ProtoRequest::Generate(proto_request),
-        );
-
-        debug!(
-            "ChatRequestBuilding completed in {:?}",
-            build_start.elapsed()
         );
         Ok(None)
     }
