@@ -71,12 +71,17 @@ impl LoadBalancingPolicy for PowerOfTwoPolicy {
         // If either worker is missing token data (e.g. monitor failure),
         // we must degrade BOTH to request counts to ensure fairness.
         let (load1, load2, load_type) = match (load1_tokens, load2_tokens) {
-            (Some(t1), Some(t2)) => {
-                // Both have token data. Compare Tokens.
+            (Some(t1), Some(t2)) if t1 != t2 => {
+                // Both have token data and they differ. Compare by tokens.
                 (t1, t2, "tokens")
             }
+            (Some(_), Some(_)) => {
+                // Both have token data but equal (e.g. both 0 for embedding workloads).
+                // Fall back to request counts to break the tie.
+                (worker1.load() as isize, worker2.load() as isize, "requests(tie-break)")
+            }
             _ => {
-                // If One or both are missing token data.
+                // One or both are missing token data.
                 // Fallback to local request counts for BOTH.
                 (worker1.load() as isize, worker2.load() as isize, "requests")
             }
