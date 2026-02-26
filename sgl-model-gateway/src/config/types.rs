@@ -552,7 +552,7 @@ impl Default for RouterConfig {
             max_payload_size: 536_870_912,     // 512MB
             request_timeout_secs: 1800,        // 30 minutes
             worker_startup_timeout_secs: 1800, // 30 minutes for large model loading
-            worker_startup_check_interval_secs: 1,
+            worker_startup_check_interval_secs: 5,
             dp_aware: false,
             api_key: None,
             discovery: None,

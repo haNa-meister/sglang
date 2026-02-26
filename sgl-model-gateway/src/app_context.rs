@@ -511,6 +511,9 @@ impl AppContextBuilder {
             .client
             .as_ref()
             .expect("client must be set before load monitor");
+        // Use 1s load polling interval for responsive load balancing
+        // (separate from worker_startup_check_interval_secs which controls health checks)
+        let load_poll_interval_secs = 1;
         self.load_monitor = Some(Arc::new(LoadMonitor::new(
             self.worker_registry
                 .as_ref()
@@ -521,7 +524,7 @@ impl AppContextBuilder {
                 .expect("policy_registry must be set")
                 .clone(),
             client.clone(),
-            config.worker_startup_check_interval_secs,
+            load_poll_interval_secs,
         )));
         self
     }
