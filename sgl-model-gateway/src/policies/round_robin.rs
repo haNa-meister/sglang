@@ -5,6 +5,8 @@ use std::sync::{
     Arc,
 };
 
+use tracing::debug;
+
 use super::{get_healthy_worker_indices, LoadBalancingPolicy, SelectWorkerInfo};
 use crate::core::Worker;
 
@@ -39,8 +41,17 @@ impl LoadBalancingPolicy for RoundRobinPolicy {
         // Get and increment counter atomically
         let count = self.counter.fetch_add(1, Ordering::Relaxed);
         let selected_idx = count % healthy_indices.len();
+        let worker_idx = healthy_indices[selected_idx];
 
-        Some(healthy_indices[selected_idx])
+        debug!(
+            "Round-robin selection: counter={} -> worker[{}]={}  (healthy={})",
+            count,
+            worker_idx,
+            workers[worker_idx].url(),
+            healthy_indices.len(),
+        );
+
+        Some(worker_idx)
     }
 
     fn name(&self) -> &'static str {

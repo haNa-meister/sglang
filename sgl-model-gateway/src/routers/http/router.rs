@@ -186,6 +186,15 @@ impl Router {
             },
         )?;
 
+        let selected = &available[idx];
+        debug!(
+            "HTTP worker selected: url={}, model={}, policy={}, available_workers={}",
+            selected.url(),
+            model_id.unwrap_or("default"),
+            policy.name(),
+            available.len(),
+        );
+
         // Record worker selection metric (Layer 3)
         Metrics::record_worker_selection(
             metrics_labels::WORKER_REGULAR,

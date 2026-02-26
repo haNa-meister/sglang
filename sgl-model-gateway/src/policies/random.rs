@@ -3,6 +3,7 @@
 use std::sync::Arc;
 
 use rand::Rng;
+use tracing::debug;
 
 use super::{get_healthy_worker_indices, LoadBalancingPolicy, SelectWorkerInfo};
 use crate::core::Worker;
@@ -33,8 +34,16 @@ impl LoadBalancingPolicy for RandomPolicy {
 
         let mut rng = rand::rng();
         let random_idx = rng.random_range(0..healthy_indices.len());
+        let worker_idx = healthy_indices[random_idx];
 
-        Some(healthy_indices[random_idx])
+        debug!(
+            "Random selection: worker[{}]={}  (healthy={})",
+            worker_idx,
+            workers[worker_idx].url(),
+            healthy_indices.len(),
+        );
+
+        Some(worker_idx)
     }
 
     fn name(&self) -> &'static str {

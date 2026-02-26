@@ -70,15 +70,15 @@ impl LoadBalancingPolicy for PowerOfTwoPolicy {
 
         // If either worker is missing token data (e.g. monitor failure),
         // we must degrade BOTH to request counts to ensure fairness.
-        let (load1, load2) = match (load1_tokens, load2_tokens) {
+        let (load1, load2, load_type) = match (load1_tokens, load2_tokens) {
             (Some(t1), Some(t2)) => {
                 // Both have token data. Compare Tokens.
-                (t1, t2)
+                (t1, t2, "tokens")
             }
             _ => {
                 // If One or both are missing token data.
                 // Fallback to local request counts for BOTH.
-                (worker1.load() as isize, worker2.load() as isize)
+                (worker1.load() as isize, worker2.load() as isize, "requests")
             }
         };
 
@@ -90,12 +90,13 @@ impl LoadBalancingPolicy for PowerOfTwoPolicy {
         };
 
         debug!(
-            "Power-of-two selection: {}={} vs {}={} -> selected {}",
+            "Power-of-two selection: {}={} vs {}={} -> selected {} (load_type={})",
             worker1.url(),
             load1,
             worker2.url(),
             load2,
-            workers[selected_idx].url()
+            workers[selected_idx].url(),
+            load_type,
         );
 
         // Increment processed counter
