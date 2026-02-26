@@ -1836,11 +1836,13 @@ class Scheduler(
                     # Merge running_batch with prefill batch
                     self.running_batch.merge_batch(self.last_batch)
 
-            # For prefill-only batch, filter out finished requests since they
-            # won't go through the decode step. This keeps running_batch accurate
-            # for load reporting (num_running_reqs).
-            if self.running_batch.is_prefill_only:
-                self.running_batch.filter_batch()
+        # For prefill-only batch, filter out finished requests since they
+        # won't go through the decode step. This keeps running_batch accurate
+        # for load reporting (num_running_reqs).
+        # This runs outside the last_batch block so stale requests are cleaned
+        # even when no new batches arrive (e.g. traffic stops).
+        if self.running_batch.is_prefill_only:
+            self.running_batch.filter_batch()
 
         new_batch = self.get_new_batch_prefill()
 
