@@ -325,7 +325,7 @@ impl LoadMonitor {
         worker_registry: Arc<WorkerRegistry>,
         policy_registry: Arc<PolicyRegistry>,
         client: reqwest::Client,
-        interval_secs: u64,
+        interval_ms: u64,
     ) -> Self {
         let (tx, rx) = watch::channel(HashMap::new());
 
@@ -333,7 +333,7 @@ impl LoadMonitor {
             worker_registry,
             policy_registry,
             client,
-            interval: Duration::from_secs(interval_secs),
+            interval: Duration::from_millis(interval_ms),
             tx,
             rx,
             monitor_handle: Arc::new(Mutex::new(None)),
@@ -390,10 +390,10 @@ impl LoadMonitor {
         loop {
             interval_timer.tick().await;
 
-            let power_of_two_policies = policy_registry.get_all_power_of_two_policies();
+            let load_polling_policies = policy_registry.get_all_load_polling_policies();
 
-            if power_of_two_policies.is_empty() {
-                debug!("No PowerOfTwo policies found, skipping load fetch");
+            if load_polling_policies.is_empty() {
+                debug!("No load-polling policies found, skipping load fetch");
                 continue;
             }
 
@@ -406,12 +406,12 @@ impl LoadMonitor {
 
             if !loads.is_empty() {
                 debug!(
-                    "Fetched loads from {} workers, updating {} PowerOfTwo policies: {:?}",
+                    "Fetched loads from {} workers, updating {} load-polling policies: {:?}",
                     loads.len(),
-                    power_of_two_policies.len(),
+                    load_polling_policies.len(),
                     loads
                 );
-                for policy in &power_of_two_policies {
+                for policy in &load_polling_policies {
                     policy.update_loads(&loads);
                 }
                 let _ = tx.send(loads);

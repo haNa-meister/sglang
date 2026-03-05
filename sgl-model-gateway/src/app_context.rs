@@ -507,13 +507,20 @@ impl AppContextBuilder {
 
     /// Create load monitor
     fn with_load_monitor(mut self, config: &RouterConfig) -> Self {
+        use crate::config::PolicyConfig;
+
         let client = self
             .client
             .as_ref()
             .expect("client must be set before load monitor");
-        // Use 1s load polling interval for responsive load balancing
-        // (separate from worker_startup_check_interval_secs which controls health checks)
-        let load_poll_interval_secs = 1;
+        // Determine load polling interval from policy config.
+        // load_aware uses milliseconds (default 100ms), others use 1s.
+        let load_poll_interval_ms = match &config.policy {
+            PolicyConfig::LoadAware {
+                load_check_interval_ms,
+            } => *load_check_interval_ms,
+            _ => 1000, // 1s default for other policies
+        };
         self.load_monitor = Some(Arc::new(LoadMonitor::new(
             self.worker_registry
                 .as_ref()
@@ -524,7 +531,7 @@ impl AppContextBuilder {
                 .expect("policy_registry must be set")
                 .clone(),
             client.clone(),
-            load_poll_interval_secs,
+            load_poll_interval_ms,
         )));
         self
     }

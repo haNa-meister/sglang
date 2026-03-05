@@ -359,6 +359,16 @@ pub enum PolicyConfig {
     #[serde(rename = "consistent_hashing")]
     ConsistentHashing,
 
+    /// Load-aware policy: always picks the least loaded worker.
+    /// Maintains local counters incremented on dispatch, decremented on completion,
+    /// overwritten with real server data on each LoadMonitor poll.
+    #[serde(rename = "load_aware")]
+    LoadAware {
+        /// Interval between load checks in milliseconds (default: 100)
+        #[serde(default = "default_load_aware_interval_ms")]
+        load_check_interval_ms: u64,
+    },
+
     /// Prefix hash policy for KV cache-aware load balancing.
     /// A lightweight alternative to cache_aware radix tree.
     /// Routes requests based on prefix token hash for cache locality.
@@ -384,6 +394,10 @@ fn default_load_factor() -> f64 {
     1.25
 }
 
+fn default_load_aware_interval_ms() -> u64 {
+    100
+}
+
 fn default_manual_eviction_interval_secs() -> u64 {
     60
 }
@@ -401,6 +415,7 @@ impl PolicyConfig {
             PolicyConfig::PowerOfTwo { .. } => "power_of_two",
             PolicyConfig::Bucket { .. } => "bucket",
             PolicyConfig::Manual { .. } => "manual",
+            PolicyConfig::LoadAware { .. } => "load_aware",
             PolicyConfig::ConsistentHashing => "consistent_hashing",
             PolicyConfig::PrefixHash { .. } => "prefix_hash",
         }

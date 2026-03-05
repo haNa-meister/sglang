@@ -4,8 +4,8 @@ use std::sync::Arc;
 
 use super::{
     BucketConfig, BucketPolicy, CacheAwareConfig, CacheAwarePolicy, ConsistentHashingPolicy,
-    LoadBalancingPolicy, ManualConfig, ManualPolicy, PowerOfTwoPolicy, PrefixHashConfig,
-    PrefixHashPolicy, RandomPolicy, RoundRobinPolicy,
+    LoadAwarePolicy, LoadBalancingPolicy, ManualConfig, ManualPolicy, PowerOfTwoPolicy,
+    PrefixHashConfig, PrefixHashPolicy, RandomPolicy, RoundRobinPolicy,
 };
 use crate::config::PolicyConfig;
 
@@ -57,6 +57,7 @@ impl PolicyFactory {
                 };
                 Arc::new(ManualPolicy::with_config(config))
             }
+            PolicyConfig::LoadAware { .. } => Arc::new(LoadAwarePolicy::new()),
             PolicyConfig::ConsistentHashing => Arc::new(ConsistentHashingPolicy::new()),
             PolicyConfig::PrefixHash {
                 prefix_token_count,
@@ -80,6 +81,7 @@ impl PolicyFactory {
             "cache_aware" | "cacheaware" => Some(Arc::new(CacheAwarePolicy::new())),
             "bucket" => Some(Arc::new(BucketPolicy::new())),
             "manual" => Some(Arc::new(ManualPolicy::new())),
+            "load_aware" | "loadaware" => Some(Arc::new(LoadAwarePolicy::new())),
             "consistent_hashing" | "consistenthashing" => {
                 Some(Arc::new(ConsistentHashingPolicy::new()))
             }

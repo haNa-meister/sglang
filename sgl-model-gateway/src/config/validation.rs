@@ -229,6 +229,17 @@ impl ConfigValidator {
                     });
                 }
             }
+            PolicyConfig::LoadAware {
+                load_check_interval_ms,
+            } => {
+                if *load_check_interval_ms == 0 {
+                    return Err(ConfigError::InvalidValue {
+                        field: "load_check_interval_ms".to_string(),
+                        value: load_check_interval_ms.to_string(),
+                        reason: "Must be > 0".to_string(),
+                    });
+                }
+            }
             PolicyConfig::PrefixHash {
                 prefix_token_count,
                 load_factor,
