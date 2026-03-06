@@ -260,12 +260,20 @@ impl WorkerManager {
 
         match req.send().await {
             Ok(r) if r.status().is_success() => match r.json::<Value>().await {
-                Ok(json) if json.is_array() => json
-                    .as_array()
-                    .unwrap()
-                    .iter()
-                    .filter_map(|e| e.get("num_tokens").and_then(|v| v.as_i64()))
-                    .sum::<i64>() as isize,
+                Ok(json) if json.is_array() => {
+                    // Weighted score: running + 2 * waiting = num_reqs + num_waiting_reqs
+                    // This penalizes queued requests more heavily than running ones
+                    let arr = json.as_array().unwrap();
+                    let num_reqs: i64 = arr
+                        .iter()
+                        .filter_map(|e| e.get("num_reqs").and_then(|v| v.as_i64()))
+                        .sum();
+                    let num_waiting: i64 = arr
+                        .iter()
+                        .filter_map(|e| e.get("num_waiting_reqs").and_then(|v| v.as_i64()))
+                        .sum();
+                    (num_reqs + num_waiting) as isize
+                }
                 _ => -1,
             },
             _ => -1,
