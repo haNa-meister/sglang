@@ -386,6 +386,8 @@ impl LoadMonitor {
         tx: watch::Sender<HashMap<String, isize>>,
     ) {
         let mut interval_timer = tokio::time::interval(interval);
+        let mut last_log_time = std::time::Instant::now();
+        let log_interval = Duration::from_secs(10);
 
         loop {
             interval_timer.tick().await;
@@ -405,12 +407,15 @@ impl LoadMonitor {
             }
 
             if !loads.is_empty() {
-                debug!(
-                    "Fetched loads from {} workers, updating {} load-polling policies: {:?}",
-                    loads.len(),
-                    load_polling_policies.len(),
-                    loads
-                );
+                if last_log_time.elapsed() >= log_interval {
+                    debug!(
+                        "Fetched loads from {} workers, updating {} load-polling policies: {:?}",
+                        loads.len(),
+                        load_polling_policies.len(),
+                        loads
+                    );
+                    last_log_time = std::time::Instant::now();
+                }
                 for policy in &load_polling_policies {
                     policy.update_loads(&loads);
                 }
