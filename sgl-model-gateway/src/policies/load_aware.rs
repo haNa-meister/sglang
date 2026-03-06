@@ -49,10 +49,11 @@ impl WorkerLoadState {
         cached + self.dispatch_delta.load(Ordering::Relaxed)
     }
 
-    /// Increment dispatch delta by 1 (called on each request dispatch).
-    /// Added to running count for safety; poll overwrites and resets to 0.
+    /// Increment dispatch delta by 4 (called on each request dispatch).
+    /// Matches the waiting weight so local tracking is proportional to poll scores.
+    /// Poll overwrites and resets to 0.
     fn increment_delta(&self) {
-        self.dispatch_delta.fetch_add(1, Ordering::Relaxed);
+        self.dispatch_delta.fetch_add(4, Ordering::Relaxed);
     }
 
     /// Overwrite with real data from LoadMonitor and reset delta
@@ -251,15 +252,15 @@ mod tests {
 
         let info = SelectWorkerInfo::default();
 
-        // First request -> w1 (tie: first wins, delta becomes 1)
+        // First request -> w1 (tie: first wins, delta becomes 4)
         let idx1 = policy.select_worker(&workers, &info).unwrap();
         assert_eq!(idx1, 0);
 
-        // Second request -> w2 (w1=1, w2=0)
+        // Second request -> w2 (w1=4, w2=0)
         let idx2 = policy.select_worker(&workers, &info).unwrap();
         assert_eq!(idx2, 1);
 
-        // Third request -> w1 (both at 1 now, tie: first wins)
+        // Third request -> w1 (both at 4 now, tie: first wins)
         let idx3 = policy.select_worker(&workers, &info).unwrap();
         assert_eq!(idx3, 0);
     }
