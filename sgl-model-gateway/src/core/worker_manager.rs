@@ -247,21 +247,12 @@ impl WorkerManager {
         }
     }
 
-    /// Parse load score from a /get_load JSON response
+    /// Parse load score from a /get_load JSON response (uses num_tokens)
     fn parse_load_json(json: &Value) -> isize {
         if let Some(arr) = json.as_array() {
-            // Weighted score: running + 4 * waiting
-            // = (num_reqs - num_waiting) + 4 * num_waiting
-            // = num_reqs + 3 * num_waiting
-            let num_reqs: i64 = arr
-                .iter()
-                .filter_map(|e| e.get("num_reqs").and_then(|v| v.as_i64()))
-                .sum();
-            let num_waiting: i64 = arr
-                .iter()
-                .filter_map(|e| e.get("num_waiting_reqs").and_then(|v| v.as_i64()))
-                .sum();
-            (num_reqs + 3 * num_waiting) as isize
+            arr.iter()
+                .filter_map(|e| e.get("num_tokens").and_then(|v| v.as_i64()))
+                .sum::<i64>() as isize
         } else {
             -1
         }

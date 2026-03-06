@@ -49,11 +49,10 @@ impl WorkerLoadState {
         cached + self.dispatch_delta.load(Ordering::Relaxed)
     }
 
-    /// Increment dispatch delta by 4 (called on each request dispatch).
-    /// Matches the waiting weight so local tracking is proportional to poll scores.
+    /// Add estimated tokens to dispatch delta (called on each request dispatch).
     /// Poll overwrites and resets to 0.
-    fn increment_delta(&self) {
-        self.dispatch_delta.fetch_add(4, Ordering::Relaxed);
+    fn add_delta(&self, estimated_tokens: isize) {
+        self.dispatch_delta.fetch_add(estimated_tokens, Ordering::Relaxed);
     }
 
     /// Overwrite with real data from LoadMonitor and reset delta
@@ -116,7 +115,7 @@ impl LoadBalancingPolicy for LoadAwarePolicy {
     fn select_worker(
         &self,
         workers: &[Arc<dyn Worker>],
-        _info: &SelectWorkerInfo,
+        info: &SelectWorkerInfo,
     ) -> Option<usize> {
         let healthy_indices = get_healthy_worker_indices(workers);
 
@@ -124,16 +123,21 @@ impl LoadBalancingPolicy for LoadAwarePolicy {
             return None;
         }
 
+        // Estimate tokens from request text (chars / 4 is a rough approximation)
+        let estimated_tokens = info
+            .request_text
+            .map(|text| (text.len() / 4).max(1) as isize)
+            .unwrap_or(1);
+
         if healthy_indices.len() == 1 {
             let idx = healthy_indices[0];
             let state = self.get_or_create_state(workers[idx].url());
-            state.increment_delta();
+            state.add_delta(estimated_tokens);
             workers[idx].increment_processed();
             return Some(idx);
         }
 
-        // Find the worker with the minimum weighted load across ALL healthy workers
-        // Score = (cached running + 2*waiting from poll) + local dispatch delta
+        // Find the worker with the minimum token load across ALL healthy workers
         let mut min_load = isize::MAX;
         let mut min_idx = healthy_indices[0];
         let mut used_cached = false;
@@ -144,11 +148,11 @@ impl LoadBalancingPolicy for LoadAwarePolicy {
             let effective = state.effective_load();
 
             let load = if effective >= 0 {
-                // Use cached weighted score + local dispatch delta
+                // Use cached num_tokens + local token delta
                 used_cached = true;
                 effective
             } else {
-                // No cached data yet: use local dispatch delta only
+                // No cached data yet: use local token delta only
                 state.dispatch_delta.load(Ordering::Relaxed)
             };
 
@@ -158,21 +162,25 @@ impl LoadBalancingPolicy for LoadAwarePolicy {
             }
         }
 
-        // Increment local dispatch counter for the selected worker
-        // This adds to the running count; poll will overwrite with real weighted score
+        // Add estimated tokens to dispatch delta for the selected worker
         let state = self.get_or_create_state(workers[min_idx].url());
-        state.increment_delta();
+        state.add_delta(estimated_tokens);
 
         debug!(
-            "Load-aware selection: selected {} with load {} (out of {} healthy, cached={})",
+            "Load-aware selection: selected {} with load {} (est_tokens={}, out of {} healthy, cached={})",
             workers[min_idx].url(),
             min_load,
+            estimated_tokens,
             healthy_indices.len(),
             used_cached,
         );
 
         workers[min_idx].increment_processed();
         Some(min_idx)
+    }
+
+    fn needs_request_text(&self) -> bool {
+        true
     }
 
     fn name(&self) -> &'static str {
@@ -252,15 +260,15 @@ mod tests {
 
         let info = SelectWorkerInfo::default();
 
-        // First request -> w1 (tie: first wins, delta becomes 4)
+        // First request -> w1 (tie: first wins, delta becomes 1)
         let idx1 = policy.select_worker(&workers, &info).unwrap();
         assert_eq!(idx1, 0);
 
-        // Second request -> w2 (w1=4, w2=0)
+        // Second request -> w2 (w1=1, w2=0)
         let idx2 = policy.select_worker(&workers, &info).unwrap();
         assert_eq!(idx2, 1);
 
-        // Third request -> w1 (both at 4 now, tie: first wins)
+        // Third request -> w1 (both at 1 now, tie: first wins)
         let idx3 = policy.select_worker(&workers, &info).unwrap();
         assert_eq!(idx3, 0);
     }
@@ -294,21 +302,30 @@ mod tests {
     }
 
     #[test]
-    fn test_weighted_score_routing() {
+    fn test_token_estimation_from_text() {
         let policy = LoadAwarePolicy::new();
         let workers = create_workers(&["http://w1:8000", "http://w2:8000"]);
 
-        // w1: running=1, waiting=3 -> score = (1+3) + 3 = 7
-        // w2: running=2, waiting=0 -> score = (2+0) + 0 = 2
-        // (score = num_reqs + num_waiting_reqs from parse_load_response)
+        // Both at 0 token load
         let mut loads = HashMap::new();
-        loads.insert("http://w1:8000".to_string(), 7); // high waiting penalty
-        loads.insert("http://w2:8000".to_string(), 2); // no waiting
+        loads.insert("http://w1:8000".to_string(), 0);
+        loads.insert("http://w2:8000".to_string(), 0);
         policy.update_loads(&loads);
 
-        let info = SelectWorkerInfo::default();
-        let idx = policy.select_worker(&workers, &info).unwrap();
-        assert_eq!(idx, 1, "Should prefer w2 with lower weighted score");
+        // Send a request with ~400 chars -> ~100 estimated tokens
+        let text = "a".repeat(400);
+        let info = SelectWorkerInfo {
+            request_text: Some(&text),
+            ..Default::default()
+        };
+
+        // First request -> w1 (tie), adds ~100 token delta
+        let idx1 = policy.select_worker(&workers, &info).unwrap();
+        assert_eq!(idx1, 0);
+
+        // Second request -> w2 (w1 has 100 token delta, w2 has 0)
+        let idx2 = policy.select_worker(&workers, &info).unwrap();
+        assert_eq!(idx2, 1);
     }
 
     #[test]
