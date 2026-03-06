@@ -514,11 +514,12 @@ impl AppContextBuilder {
             .as_ref()
             .expect("client must be set before load monitor");
         // Determine load polling interval from policy config.
-        // load_aware uses milliseconds (default 100ms), others use 1s.
+        // load_aware and power_of_two use 500ms, others use 1s.
         let load_poll_interval_ms = match &config.policy {
             PolicyConfig::LoadAware {
                 load_check_interval_ms,
             } => *load_check_interval_ms,
+            PolicyConfig::PowerOfTwo { .. } => 500,
             _ => 1000, // 1s default for other policies
         };
         self.load_monitor = Some(Arc::new(LoadMonitor::new(

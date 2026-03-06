@@ -264,7 +264,7 @@ impl WorkerManager {
                     .as_array()
                     .unwrap()
                     .iter()
-                    .filter_map(|e| e.get("num_reqs").and_then(|v| v.as_i64()))
+                    .filter_map(|e| e.get("num_tokens").and_then(|v| v.as_i64()))
                     .sum::<i64>() as isize,
                 _ => -1,
             },
