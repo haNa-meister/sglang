@@ -140,12 +140,14 @@ impl LoadBalancingPolicy for LoadAwarePolicy {
             let state = self.get_or_create_state(worker.url());
             let effective = state.effective_load();
 
-            // Use effective load if cached data is available, otherwise fall back to worker.load()
             let load = if effective >= 0 {
+                // Use cached server data + local dispatch delta
                 used_cached = true;
                 effective
             } else {
-                worker.load() as isize
+                // No cached data yet: use worker.load() + our local dispatch delta
+                // The delta ensures we don't keep picking the same worker before first poll
+                worker.load() as isize + state.dispatch_delta.load(Ordering::Relaxed)
             };
 
             if load < min_load {
@@ -302,6 +304,23 @@ mod tests {
         let info = SelectWorkerInfo::default();
         let idx = policy.select_worker(&workers, &info).unwrap();
         assert_eq!(idx, 1, "Without cached data, should fall back to worker.load()");
+    }
+
+    #[test]
+    fn test_distributes_before_first_poll() {
+        let policy = LoadAwarePolicy::new();
+        let workers = create_workers(&["http://w1:8000", "http://w2:8000", "http://w3:8000"]);
+
+        // No update_loads called - should still distribute via dispatch deltas
+        let info = SelectWorkerInfo::default();
+        let mut counts = [0usize; 3];
+        for _ in 0..6 {
+            let idx = policy.select_worker(&workers, &info).unwrap();
+            counts[idx] += 1;
+        }
+
+        // Should distribute evenly even without cached data
+        assert_eq!(counts, [2, 2, 2], "Should distribute evenly before first poll");
     }
 
     #[test]
