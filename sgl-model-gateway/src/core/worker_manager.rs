@@ -247,11 +247,64 @@ impl WorkerManager {
         }
     }
 
+    /// Parse load score from a /get_load JSON response
+    fn parse_load_json(json: &Value) -> isize {
+        if let Some(arr) = json.as_array() {
+            // Weighted score: running + 4 * waiting
+            // = (num_reqs - num_waiting) + 4 * num_waiting
+            // = num_reqs + 3 * num_waiting
+            let num_reqs: i64 = arr
+                .iter()
+                .filter_map(|e| e.get("num_reqs").and_then(|v| v.as_i64()))
+                .sum();
+            let num_waiting: i64 = arr
+                .iter()
+                .filter_map(|e| e.get("num_waiting_reqs").and_then(|v| v.as_i64()))
+                .sum();
+            (num_reqs + 3 * num_waiting) as isize
+        } else {
+            -1
+        }
+    }
+
+    /// Build the load server URL (port+1000) from the worker URL.
+    /// e.g., "http://localhost:8080" -> "http://localhost:9080/get_load"
+    fn load_server_url(worker_url: &str) -> Option<String> {
+        if let Some(colon_pos) = worker_url.rfind(':') {
+            let port_str = &worker_url[colon_pos + 1..];
+            if let Ok(port) = port_str.parse::<u16>() {
+                let base = &worker_url[..colon_pos + 1];
+                return Some(format!("{}{}/get_load", base, port + 1000));
+            }
+        }
+        None
+    }
+
     async fn parse_load_response(
         client: &reqwest::Client,
         url: &str,
         api_key: Option<&str>,
     ) -> isize {
+        // Try lightweight load server on port+1000 first (avoids inference contention)
+        if let Some(load_url) = Self::load_server_url(url) {
+            if let Ok(r) = client
+                .get(&load_url)
+                .timeout(Duration::from_secs(2))
+                .send()
+                .await
+            {
+                if r.status().is_success() {
+                    if let Ok(json) = r.json::<Value>().await {
+                        let score = Self::parse_load_json(&json);
+                        if score >= 0 {
+                            return score;
+                        }
+                    }
+                }
+            }
+        }
+
+        // Fallback to main server /get_load endpoint
         let load_url = format!("{}/get_load", url);
         let mut req = client.get(&load_url).timeout(REQUEST_TIMEOUT);
         if let Some(key) = api_key {
@@ -260,21 +313,7 @@ impl WorkerManager {
 
         match req.send().await {
             Ok(r) if r.status().is_success() => match r.json::<Value>().await {
-                Ok(json) if json.is_array() => {
-                    // Weighted score: running + 4 * waiting
-                    // = (num_reqs - num_waiting) + 4 * num_waiting
-                    // = num_reqs + 3 * num_waiting
-                    let arr = json.as_array().unwrap();
-                    let num_reqs: i64 = arr
-                        .iter()
-                        .filter_map(|e| e.get("num_reqs").and_then(|v| v.as_i64()))
-                        .sum();
-                    let num_waiting: i64 = arr
-                        .iter()
-                        .filter_map(|e| e.get("num_waiting_reqs").and_then(|v| v.as_i64()))
-                        .sum();
-                    (num_reqs + 3 * num_waiting) as isize
-                }
+                Ok(json) => Self::parse_load_json(&json),
                 _ => -1,
             },
             _ => -1,

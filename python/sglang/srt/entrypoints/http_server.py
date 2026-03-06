@@ -1669,6 +1669,62 @@ def _wait_weights_ready():
     )
 
 
+def _start_load_server(port: int, host: str):
+    """Start a lightweight HTTP server on a separate port for load polling.
+
+    This avoids contention with inference requests on the main FastAPI event loop.
+    The router's LoadMonitor can poll this port for /get_load without competing
+    with inference traffic.
+    """
+    from http.server import HTTPServer, BaseHTTPRequestHandler
+    import json as _json
+
+    class LoadHandler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            if self.path == "/get_load":
+                try:
+                    # Access the shared global state's tokenizer_manager
+                    # Use the synchronous scheduler get_load directly via ZMQ
+                    import asyncio
+
+                    loop = asyncio.new_event_loop()
+                    result = loop.run_until_complete(
+                        _global_state.tokenizer_manager.get_load()
+                    )
+                    loop.close()
+
+                    # Serialize the result
+                    if isinstance(result, list):
+                        data = [dataclasses.asdict(r) for r in result]
+                    else:
+                        data = dataclasses.asdict(result)
+
+                    body = _json.dumps(data).encode()
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+                except Exception as e:
+                    self.send_response(500)
+                    self.end_headers()
+                    self.wfile.write(str(e).encode())
+            else:
+                self.send_response(404)
+                self.end_headers()
+
+        def log_message(self, format, *args):
+            # Suppress request logging to avoid noise
+            pass
+
+    def _run():
+        server = HTTPServer((host, port), LoadHandler)
+        server.serve_forever()
+
+    t = threading.Thread(target=_run, daemon=True)
+    t.start()
+
+
 def launch_server(
     server_args: ServerArgs,
     init_tokenizer_manager_func: Callable = init_tokenizer_manager,
@@ -1743,6 +1799,12 @@ def launch_server(
         multi_tokenizer_args_shm = write_data_for_multi_tokenizer(
             port_args, server_args, scheduler_infos[0]
         )
+
+    # Launch lightweight load server on port+1000 for low-latency load polling.
+    # This avoids contention with inference requests on the main FastAPI event loop.
+    load_server_port = server_args.port + 1000
+    _start_load_server(load_server_port, server_args.host)
+    logger.info(f"Lightweight load server started on port {load_server_port}")
 
     try:
         # Update logging configs

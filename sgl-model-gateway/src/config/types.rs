@@ -395,7 +395,7 @@ fn default_load_factor() -> f64 {
 }
 
 fn default_load_aware_interval_ms() -> u64 {
-    200
+    100
 }
 
 fn default_manual_eviction_interval_secs() -> u64 {
