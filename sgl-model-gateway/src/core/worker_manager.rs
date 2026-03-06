@@ -283,9 +283,9 @@ impl WorkerManager {
     async fn parse_load_response(
         client: &reqwest::Client,
         url: &str,
-        api_key: Option<&str>,
+        _api_key: Option<&str>,
     ) -> isize {
-        // Try lightweight load server on port+1000 first (avoids inference contention)
+        // Use lightweight load server on port+1000 only (avoids inference contention)
         if let Some(load_url) = Self::load_server_url(url) {
             if let Ok(r) = client
                 .get(&load_url)
@@ -295,29 +295,12 @@ impl WorkerManager {
             {
                 if r.status().is_success() {
                     if let Ok(json) = r.json::<Value>().await {
-                        let score = Self::parse_load_json(&json);
-                        if score >= 0 {
-                            return score;
-                        }
+                        return Self::parse_load_json(&json);
                     }
                 }
             }
         }
-
-        // Fallback to main server /get_load endpoint
-        let load_url = format!("{}/get_load", url);
-        let mut req = client.get(&load_url).timeout(REQUEST_TIMEOUT);
-        if let Some(key) = api_key {
-            req = req.bearer_auth(key);
-        }
-
-        match req.send().await {
-            Ok(r) if r.status().is_success() => match r.json::<Value>().await {
-                Ok(json) => Self::parse_load_json(&json),
-                _ => -1,
-            },
-            _ => -1,
-        }
+        -1
     }
 
     pub async fn get_engine_metrics(

@@ -338,10 +338,14 @@ async def lifespan(fast_api_app: FastAPI):
     )
     warmup_thread.start()
 
+    # Start background load cache refresh task for lightweight load server
+    load_cache_task = asyncio.create_task(_load_cache_refresh_task())
+
     # Start the HTTP server
     try:
         yield
     finally:
+        load_cache_task.cancel()
         warmup_thread.join()
 
 
@@ -600,7 +604,9 @@ async def server_info():
 
 @app.get("/get_load")
 async def get_load():
-    return await _global_state.tokenizer_manager.get_load()
+    result = await _global_state.tokenizer_manager.get_load()
+    _update_cached_load(result)
+    return result
 
 
 # example usage:
@@ -1669,52 +1675,50 @@ def _wait_weights_ready():
     )
 
 
+_cached_load_response = threading.local()
+_cached_load_json = b'[]'
+_cached_load_lock = threading.Lock()
+
+
+def _update_cached_load(result):
+    """Update the cached load data (called from the main FastAPI event loop)."""
+    global _cached_load_json
+    try:
+        if isinstance(result, list):
+            data = [dataclasses.asdict(r) for r in result]
+        else:
+            data = [dataclasses.asdict(result)]
+        import json as _json
+
+        with _cached_load_lock:
+            _cached_load_json = _json.dumps(data).encode()
+    except Exception:
+        pass
+
+
 def _start_load_server(port: int, host: str):
     """Start a lightweight HTTP server on a separate port for load polling.
 
+    Serves cached load data that is updated by the main /get_load endpoint.
     This avoids contention with inference requests on the main FastAPI event loop.
-    The router's LoadMonitor can poll this port for /get_load without competing
-    with inference traffic.
     """
     from http.server import HTTPServer, BaseHTTPRequestHandler
-    import json as _json
 
     class LoadHandler(BaseHTTPRequestHandler):
         def do_GET(self):
             if self.path == "/get_load":
-                try:
-                    # Access the shared global state's tokenizer_manager
-                    # Use the synchronous scheduler get_load directly via ZMQ
-                    import asyncio
-
-                    loop = asyncio.new_event_loop()
-                    result = loop.run_until_complete(
-                        _global_state.tokenizer_manager.get_load()
-                    )
-                    loop.close()
-
-                    # Serialize the result
-                    if isinstance(result, list):
-                        data = [dataclasses.asdict(r) for r in result]
-                    else:
-                        data = dataclasses.asdict(result)
-
-                    body = _json.dumps(data).encode()
-                    self.send_response(200)
-                    self.send_header("Content-Type", "application/json")
-                    self.send_header("Content-Length", str(len(body)))
-                    self.end_headers()
-                    self.wfile.write(body)
-                except Exception as e:
-                    self.send_response(500)
-                    self.end_headers()
-                    self.wfile.write(str(e).encode())
+                with _cached_load_lock:
+                    body = _cached_load_json
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
             else:
                 self.send_response(404)
                 self.end_headers()
 
         def log_message(self, format, *args):
-            # Suppress request logging to avoid noise
             pass
 
     def _run():
@@ -1723,6 +1727,18 @@ def _start_load_server(port: int, host: str):
 
     t = threading.Thread(target=_run, daemon=True)
     t.start()
+
+
+async def _load_cache_refresh_task():
+    """Background async task that periodically refreshes the load cache.
+    Must be started from within the uvicorn event loop."""
+    while True:
+        try:
+            result = await _global_state.tokenizer_manager.get_load()
+            _update_cached_load(result)
+        except Exception:
+            pass
+        await asyncio.sleep(0.05)  # 50ms refresh rate
 
 
 def launch_server(
