@@ -337,6 +337,7 @@ class SchedulerMetricsMixin:
                 self.stats.num_decode_transfer_queue_reqs = QueueCount.from_reqs(
                     self.disagg_decode_transfer_queue.queue, priority_enabled
                 )
+                self.stats.kv_transfer_speed_gb_s = self.kv_transfer_speed_gb_s
 
             # Others
             self.calculate_utilization()
@@ -472,6 +473,7 @@ class SchedulerMetricsMixin:
             msg += f"#prealloc-req: {len(self.disagg_decode_prealloc_queue.queue)}, "
             msg += f"#transfer-req: {len(self.disagg_decode_transfer_queue.queue)}, "
             msg += f"#retracted-req: {len(self.disagg_decode_prealloc_queue.retracted_queue)}, "
+            msg += f"transfer bw (GB/s): {self.kv_transfer_speed_gb_s:.2f}, "
 
         if (
             self.server_args.language_only
