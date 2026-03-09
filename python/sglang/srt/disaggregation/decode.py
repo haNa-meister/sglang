@@ -43,6 +43,7 @@ from sglang.srt.disaggregation.utils import (
     get_kv_class,
     is_mla_backend,
     kv_to_page_indices,
+    kv_to_page_num,
     poll_and_all_reduce,
     prepare_abort,
 )
@@ -890,6 +891,31 @@ class DecodeTransferQueue:
         self.queue = [
             entry for i, entry in enumerate(self.queue) if i not in indices_to_remove
         ]
+
+        # Compute and update KV transfer bandwidth for transferred requests
+        if transferred_reqs:
+            page_size = self.scheduler.token_to_kv_pool_allocator.page_size
+            bytes_per_page_all_layers = sum(
+                self.scheduler.disagg_decode_prealloc_queue.kv_manager.kv_args.kv_item_lens
+            )
+            for req in transferred_reqs:
+                ts = req.time_stats
+                if (
+                    ts.decode_transfer_queue_entry_time > 0
+                    and ts.wait_queue_entry_time > 0
+                ):
+                    transfer_latency_s = (
+                        ts.wait_queue_entry_time
+                        - ts.decode_transfer_queue_entry_time
+                    )
+                    if transfer_latency_s > 0:
+                        num_pages = kv_to_page_num(
+                            len(req.fill_ids), page_size
+                        )
+                        total_bytes = bytes_per_page_all_layers * num_pages
+                        total_mb = total_bytes / (1024 * 1024)
+                        speed_gb_s = (total_mb / 1024) / transfer_latency_s
+                        self.scheduler.kv_transfer_speed_gb_s = speed_gb_s
 
         return transferred_reqs
 
