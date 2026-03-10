@@ -21,6 +21,7 @@ Life cycle of a request in the decode server
 from __future__ import annotations
 
 import logging
+import random
 import time
 from collections import deque
 from dataclasses import dataclass
@@ -916,6 +917,13 @@ class DecodeTransferQueue:
                         total_mb = total_bytes / (1024 * 1024)
                         speed_gb_s = (total_mb / 1024) / transfer_latency_s
                         self.scheduler.kv_transfer_speed_gb_s = speed_gb_s
+                        if random.random() < 0.1:
+                            logger.info(
+                                f"KV transfer: tokens={len(req.fill_ids)}, "
+                                f"size={total_mb:.1f} MB, "
+                                f"latency={transfer_latency_s*1000:.1f} ms, "
+                                f"speed={speed_gb_s:.2f} GB/s"
+                            )
 
         return transferred_reqs
 
